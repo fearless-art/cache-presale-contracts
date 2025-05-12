@@ -3,12 +3,12 @@ pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
-contract CachePresale is EIP712, Ownable, Pausable {
+contract CachePresale is EIP712, Ownable2Step, Pausable {
     using ECDSA for bytes32;
     using SafeERC20 for IERC20;
     address public immutable adminSigner;
