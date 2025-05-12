@@ -9,10 +9,10 @@ const CachePresaleModule = buildModule("CachePresaleModule", (m) => {
     "adminSigner",
     "0xAFB90ee4388CE8c79F1Fd35A4229C108AdA27Ba6"
   );
-  
+
   const treasury = m.getParameter(
     "treasury",
-    "0x625e9A48D858662e14E841494A3790CB6195Ab54"
+    "0x604daCE67C75529b740544876b4dABB787B7eC9b"
   );
 
   // Deploy CachePresale contract
