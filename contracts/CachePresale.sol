@@ -14,7 +14,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
     address public adminSigner;
     address public treasury;
 
-    uint256 public TOKEN_SALE_HARD_CAP = 25_000_000 ether;
+    uint256 public tokenSaleHardCap = 25_000_000 ether;
     uint256 public tokensSold;
 
     // Struct to store purchase details
@@ -67,12 +67,15 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
 
     constructor(
         address _adminSigner,
-        address _treasury
+        address _treasury,
+        uint256 _tokenSaleHardCap
     ) EIP712("CachePresale", "1") Ownable(msg.sender) {
         require(_adminSigner != address(0), "Invalid admin signer address");
         require(_treasury != address(0), "Invalid treasury address");
+        require(_tokenSaleHardCap > 0, "Invalid token sale hard cap");
         adminSigner = _adminSigner;
         treasury = _treasury;
+        tokenSaleHardCap = _tokenSaleHardCap;
     }
 
     function buyCache(
@@ -84,7 +87,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         bytes memory _signedMessage
     ) external whenNotPaused {
         require(
-            tokensSold + _amountReceived <= TOKEN_SALE_HARD_CAP,
+            tokensSold + _amountReceived <= tokenSaleHardCap,
             "Token sale hard cap reached"
         );
 
@@ -149,7 +152,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         bytes memory _signedMessage
     ) external payable whenNotPaused {
         require(
-            tokensSold + _amountReceived <= TOKEN_SALE_HARD_CAP,
+            tokensSold + _amountReceived <= tokenSaleHardCap,
             "Token sale hard cap reached"
         );
 
@@ -226,7 +229,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
 
     // function to update hard cap
     function updateHardCap(uint256 _newHardCap) external onlyOwner {
-        TOKEN_SALE_HARD_CAP = _newHardCap;
+        tokenSaleHardCap = _newHardCap;
     }
 
     // View function to get user's purchase history
