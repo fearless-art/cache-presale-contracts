@@ -28,7 +28,8 @@ describe("CachePresale", () => {
     const usdt = (await hre.viem.deployContract("USDT", []));
     const presale = (await hre.viem.deployContract("CachePresale", [
       admin.account?.address!,
-      treasury.account?.address!
+      treasury.account?.address!,
+      parseEther("25000000")
     ]));
 
     // Mint some tokens to user for testing
@@ -60,7 +61,7 @@ describe("CachePresale", () => {
     it("should have the correct hard cap", async () => {
       const { presale } = await deployContracts();
 
-      const hardCap = await presale.read.TOKEN_SALE_HARD_CAP();
+      const hardCap = await presale.read.tokenSaleHardCap();
       expect(hardCap).to.equal(parseEther("25000000")); // 25 million CACHE tokens
     });
   });
@@ -363,7 +364,7 @@ describe("CachePresale", () => {
       const { usdc, presale } = await deployContracts();
 
       // Get the hard cap
-      const hardCap = await presale.read.TOKEN_SALE_HARD_CAP();
+      const hardCap = await presale.read.tokenSaleHardCap();
 
       // Prepare parameters for buyCache with amount that would exceed hard cap
       const paymentToken = usdc.address;
@@ -434,7 +435,7 @@ describe("CachePresale", () => {
       const { usdc, presale } = await deployContracts();
 
       // Get the hard cap
-      const hardCap = await presale.read.TOKEN_SALE_HARD_CAP();
+      const hardCap = await presale.read.tokenSaleHardCap();
 
       // First purchase - just below half of hard cap
       const firstAmount = hardCap / 2n - parseEther("100");
@@ -838,6 +839,43 @@ describe("CachePresale", () => {
       await expect(presale.write.pause({
         account: user.account,
       })).to.be.rejectedWith("OwnableUnauthorizedAccount");
+    });
+
+    it("should allow owner to update admin signer", async () => {
+      const { presale } = await deployContracts();
+      const newAdmin = user2.account?.address!;
+      await presale.write.updateAdminSigner([newAdmin], { account: owner.account });
+      const admin_ = await presale.read.adminSigner();
+      expect(normalizeAddress(admin_)).to.equal(normalizeAddress(newAdmin));
+    });
+
+    it("should allow owner to update treasury", async () => {
+      const { presale } = await deployContracts();
+      const newTreasury = user2.account?.address!;
+      await presale.write.updateTreasury([newTreasury], { account: owner.account });
+      const treasury_ = await presale.read.treasury();
+      expect(normalizeAddress(treasury_)).to.equal(normalizeAddress(newTreasury));
+    });
+
+    it("should allow owner to update hard cap", async () => {
+      const { presale } = await deployContracts();
+      const newCap = parseEther("12345678");
+      await presale.write.updateHardCap([newCap], { account: owner.account });
+      const hardCap = await presale.read.tokenSaleHardCap();
+      expect(hardCap).to.equal(newCap);
+    });
+
+    it("should use Ownable2Step for ownership transfer", async () => {
+      const { presale } = await deployContracts();
+      // Start transfer
+      await presale.write.transferOwnership([user2.account?.address!], { account: owner.account });
+      // Ownership should not be transferred yet
+      let currentOwner = await presale.read.owner();
+      expect(normalizeAddress(currentOwner)).to.equal(normalizeAddress(owner.account?.address!));
+      // user2 accepts ownership
+      await presale.write.acceptOwnership({ account: user2.account });
+      currentOwner = await presale.read.owner();
+      expect(normalizeAddress(currentOwner)).to.equal(normalizeAddress(user2.account?.address!));
     });
   });
 
