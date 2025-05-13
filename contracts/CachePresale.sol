@@ -11,10 +11,10 @@ import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 contract CachePresale is EIP712, Ownable2Step, Pausable {
     using ECDSA for bytes32;
     using SafeERC20 for IERC20;
-    address public immutable adminSigner;
-    address public immutable treasury;
+    address public adminSigner;
+    address public treasury;
 
-    uint256 public constant TOKEN_SALE_HARD_CAP = 25_000_000 ether;
+    uint256 public TOKEN_SALE_HARD_CAP = 25_000_000 ether;
     uint256 public tokensSold;
 
     // Struct to store purchase details
@@ -212,6 +212,21 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
     // Function to unpause contract
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    // function to update admin signer
+    function updateAdminSigner(address _newAdminSigner) external onlyOwner {
+        adminSigner = _newAdminSigner;
+    }
+
+    // function to update treasury
+    function updateTreasury(address _newTreasury) external onlyOwner {
+        treasury = _newTreasury;
+    }
+
+    // function to update hard cap
+    function updateHardCap(uint256 _newHardCap) external onlyOwner {
+        TOKEN_SALE_HARD_CAP = _newHardCap;
     }
 
     // View function to get user's purchase history

@@ -7,7 +7,7 @@ const CachePresaleModule = buildModule("CachePresaleModule", (m) => {
   // Get deployment parameters with default values
   const adminSigner = m.getParameter(
     "adminSigner",
-    "0xAFB90ee4388CE8c79F1Fd35A4229C108AdA27Ba6"
+    "0x5419aD1442f2AFFAfa665d197E07d983f651C5b9"
   );
 
   const treasury = m.getParameter(
