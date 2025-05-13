@@ -49,6 +49,9 @@ const config: HardhatUserConfig = {
   etherscan: {
     apiKey: process.env.ETHERSCAN_ETH,
   },
+  sourcify: {
+    enabled: true
+  }
 };
 
 // Load the custom tsconfig file
