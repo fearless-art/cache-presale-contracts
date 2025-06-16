@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
-contract CachePresale is EIP712, Ownable2Step, Pausable {
+contract PresaleRegister is EIP712, Ownable2Step, Pausable {
     using ECDSA for bytes32;
     using SafeERC20 for IERC20;
     address public adminSigner;
@@ -23,7 +23,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         uint256 purchaseAmount;
     }
 
-    struct BuyCacheMessage {
+    struct BuyTokensMessage {
         address paymentToken;
         uint256 amountPaid;
         uint256 amountReceived;
@@ -31,18 +31,18 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         uint256 salt;
     }
 
-    struct BuyCacheWithEthMessage {
+    struct BuyTokensWithEthMessage {
         uint256 amountPaid;
         uint256 amountReceived;
         uint256 timeSigned;
         uint256 salt;
     }
 
-    mapping(address => uint256) public userTotalCache;
+    mapping(address => uint256) public userTotalTokens;
     mapping(address => Purchase[]) public userPurchases;
 
     // Event emitted on successful purchase
-    event CachePurchased(
+    event TokensPurchased(
         address indexed buyer,
         address indexed paymentToken,
         uint256 amountPaid,
@@ -56,20 +56,20 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
     // Mapping to track used signatures
     mapping(bytes32 => bool) public usedSignatures;
 
-    bytes32 constant BUY_CACHE_MESSAGE_TYPEHASH =
+    bytes32 constant BUY_TOKENS_MESSAGE_TYPEHASH =
         keccak256(
-            "BuyCacheMessage(address paymentToken,uint256 amountPaid,uint256 amountReceived,uint256 timeSigned,uint256 salt)"
+            "BuyTokensMessage(address paymentToken,uint256 amountPaid,uint256 amountReceived,uint256 timeSigned,uint256 salt)"
         );
-    bytes32 constant BUY_CACHE_WITH_ETH_MESSAGE_TYPEHASH =
+    bytes32 constant BUY_TOKENS_WITH_ETH_MESSAGE_TYPEHASH =
         keccak256(
-            "BuyCacheWithEthMessage(uint256 amountPaid,uint256 amountReceived,uint256 timeSigned,uint256 salt)"
+            "BuyTokensWithEthMessage(uint256 amountPaid,uint256 amountReceived,uint256 timeSigned,uint256 salt)"
         );
 
     constructor(
         address _adminSigner,
         address _treasury,
         uint256 _tokenSaleHardCap
-    ) EIP712("CachePresale", "1") Ownable(msg.sender) {
+    ) EIP712("PresaleRegister", "1") Ownable(msg.sender) {
         require(_adminSigner != address(0), "Invalid admin signer address");
         require(_treasury != address(0), "Invalid treasury address");
         require(_tokenSaleHardCap > 0, "Invalid token sale hard cap");
@@ -78,7 +78,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         tokenSaleHardCap = _tokenSaleHardCap;
     }
 
-    function buyCache(
+    function buyTokens(
         address _paymentToken,
         uint256 _amountPaid,
         uint256 _amountReceived,
@@ -99,7 +99,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         bytes32 digest = _hashTypedDataV4(
             keccak256(
                 abi.encode(
-                    BUY_CACHE_MESSAGE_TYPEHASH,
+                    BUY_TOKENS_MESSAGE_TYPEHASH,
                     _paymentToken,
                     _amountPaid,
                     _amountReceived,
@@ -126,7 +126,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         );
 
         // Update totals
-        userTotalCache[msg.sender] += _amountReceived;
+        userTotalTokens[msg.sender] += _amountReceived;
         tokensSold += _amountReceived;
 
         // Record purchase details
@@ -135,7 +135,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         );
 
         // Emit purchase event
-        emit CachePurchased(
+        emit TokensPurchased(
             msg.sender,
             _paymentToken,
             _amountPaid,
@@ -144,7 +144,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         );
     }
 
-    function buyCacheWithEth(
+    function buyTokensWithEth(
         uint256 _amountPaid,
         uint256 _amountReceived,
         uint32 _timeSigned,
@@ -167,7 +167,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         bytes32 digest = _hashTypedDataV4(
             keccak256(
                 abi.encode(
-                    BUY_CACHE_WITH_ETH_MESSAGE_TYPEHASH,
+                    BUY_TOKENS_WITH_ETH_MESSAGE_TYPEHASH,
                     _amountPaid,
                     _amountReceived,
                     _timeSigned,
@@ -190,7 +190,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         require(success, "ETH transfer failed");
 
         // Update totals
-        userTotalCache[msg.sender] += _amountReceived;
+        userTotalTokens[msg.sender] += _amountReceived;
         tokensSold += _amountReceived;
         // Record purchase details
         userPurchases[msg.sender].push(
@@ -198,7 +198,7 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
         );
 
         // Emit purchase event
-        emit CachePurchased(
+        emit TokensPurchased(
             msg.sender,
             address(0), // Use zero address to indicate ETH
             msg.value,
@@ -240,12 +240,12 @@ contract CachePresale is EIP712, Ownable2Step, Pausable {
     }
 
     // View function to get user's total CACHE received
-    function getUserTotalCache(address _user) external view returns (uint256) {
-        return userTotalCache[_user];
+    function getUserTotalTokens(address _user) external view returns (uint256) {
+        return userTotalTokens[_user];
     }
 
     // Function to receive ETH
     receive() external payable {
-        revert("Use buyCacheWithEth instead");
+        revert("Use buyTokensWithEth instead");
     }
 }

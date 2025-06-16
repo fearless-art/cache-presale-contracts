@@ -12,19 +12,6 @@ describe("MultiTierStaking", () => {
     const fundRewards = parseEther("1000");
     const fundDurationDays = 30n;
 
-    // Default configuration values
-    const defaultConfig = [
-        parseEther("5000"),   // silverThreshold
-        parseEther("10000"),  // goldThreshold
-        parseEther("20000"),  // diamondThreshold
-        50_000n,              // silverBonus (5%)
-        100_000n,             // goldBonus (10%)
-        200_000n,             // diamondBonus (20%)
-        10_000n,              // linearScale
-        20n,                  // quadraticScale
-        3_000_000_000_000n    // maxMultiplier
-    ];
-
     async function deployContracts() {
         [owner, user, user2, user3] = await hre.viem.getWalletClients();
         publicClient = await hre.viem.getPublicClient();
@@ -49,7 +36,15 @@ describe("MultiTierStaking", () => {
         const staking = await hre.viem.deployContract("MultiTierStaking", [
             depositToken.address,
             rewardToken.address,
-            ...defaultConfig
+            parseEther("5000"),   // silverThreshold
+            parseEther("10000"),  // goldThreshold
+            parseEther("20000"),  // diamondThreshold
+            50_000n,              // silverBonus (5%)
+            100_000n,             // goldBonus (10%)
+            200_000n,             // diamondBonus (20%)
+            10_000n,              // linearScale
+            20n,                  // quadraticScale
+            3_000_000_000_000n    // maxMultiplier
         ]);
 
         return { depositToken, rewardToken, staking };
