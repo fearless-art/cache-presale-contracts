@@ -16,7 +16,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  *      - Configurable reward periods with per-second distribution
  *      - Emergency functions for both users and admin
  */
-contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
+contract LockedMultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -27,11 +27,15 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
      * @notice Represents a single stake made by a user
      * @param amount The amount of tokens staked
      * @param shares The calculated shares based on amount and multipliers
+     * @param depositTime Timestamp when the stake was created
+     * @param lockDuration Duration in seconds for which the stake is locked
      * @param rewardDebt Used for reward calculation to prevent double claiming
      */
     struct Stake {
         uint256 amount;
         uint256 shares;
+        uint256 depositTime;
+        uint256 lockDuration;
         uint256 rewardDebt;
     }
 
@@ -63,8 +67,17 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Bonus percentage for Diamond tier (in basis points, e.g., 200000 = 20%)
     uint256 public immutable THRESHOLD_BONUS_PERCENTAGE_DIAMOND;
 
+    /// @notice Linear scaling constant for time-based bonuses
+    uint256 public immutable LINEAR_SCALE_CONSTANT;
+
+    /// @notice Quadratic scaling constant for time-based bonuses
+    uint256 public immutable QUADRATIC_SCALE_CONSTANT;
+
     /// @notice Base multiplier used in reward calculations (1,000,000)
     uint256 public constant BASE_MULTIPLIER = 1_000_000;
+
+    /// @notice Maximum multiplier numerator to cap bonus effects
+    uint256 public immutable MAX_MULTIPLIER_NUMERATOR;
 
     /// @notice Total amount of reward tokens available for distribution
     uint256 public totalRewards;
@@ -84,11 +97,17 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Total shares across all stakes (used for proportional reward distribution)
     uint256 public totalShares;
 
+    /// @notice Maximum number of stakes a single user can have
+    uint256 public constant MAX_STAKES_PER_USER = 20;
+
+    /// @notice Number of seconds in a day (24 * 60 * 60)
+    uint256 public constant DAY = 1 days;
+
     /// @notice Whether the contract has been funded with rewards
     bool public isFunded;
 
     /// @notice Mapping from user address to their array of stakes
-    mapping(address => Stake) public userStakes;
+    mapping(address => Stake[]) public userStakes;
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -98,15 +117,17 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
      * @notice Emitted when a user deposits tokens to create a stake
      * @param user Address of the user making the deposit
      * @param amount Amount of tokens deposited
+     * @param lockDays Number of days the stake will be locked
      */
-    event Deposit(address indexed user, uint amount);
+    event Deposit(address indexed user, uint amount, uint lockDays);
 
     /**
      * @notice Emitted when a user withdraws a stake after lock period
      * @param user Address of the user withdrawing
      * @param amount Amount of tokens withdrawn
+     * @param stakeId Index of the stake being withdrawn
      */
-    event Withdraw(address indexed user, uint amount);
+    event Withdraw(address indexed user, uint amount, uint stakeId);
 
     /**
      * @notice Emitted when a user emergency withdraws all stakes
@@ -240,6 +261,11 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
         THRESHOLD_BONUS_PERCENTAGE_SILVER = _silverBonus;
         THRESHOLD_BONUS_PERCENTAGE_GOLD = _goldBonus;
         THRESHOLD_BONUS_PERCENTAGE_DIAMOND = _diamondBonus;
+
+        LINEAR_SCALE_CONSTANT = _linearScaleConstant;
+        QUADRATIC_SCALE_CONSTANT = _quadraticScaleConstant;
+
+        MAX_MULTIPLIER_NUMERATOR = _maxMultiplierNumerator;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -249,52 +275,68 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     /**
      * @notice Deposits tokens to create a new stake with specified lock duration
      * @param amount Amount of deposit tokens to stake
+     * @param lockDays Number of days to lock the stake
      * @dev Calculates multipliers based on amount (tier bonuses) and lock duration (time bonuses)
      * @dev Claims any existing pending rewards before creating new stake
      * @dev Reverts if user has reached MAX_STAKES_PER_USER limit
      * @dev Reverts if lock duration would extend beyond reward period end
      */
     function deposit(
-        uint256 amount
+        uint256 amount,
+        uint256 lockDays
     ) external whenNotPaused nonReentrant onlyFunded onlyAfterRewardsStart {
         require(amount > 0, "Zero amount");
 
-        _claim(msg.sender);
+        uint256 lockDuration = lockDays * DAY;
+        require(block.timestamp + lockDuration <= rewardEndTime, "Too long");
+
+        _claimAll(msg.sender);
         depositToken.safeTransferFrom(msg.sender, address(this), amount);
 
-        _deposit(amount);
+        _deposit(amount, lockDays);
     }
 
     /**
      * @notice Withdraws a specific stake after its lock period has expired
+     * @param stakeId Index of the stake to withdraw from user's stakes array
      * @param withdrawAmount Amount to withdraw from the stake
      * @dev Claims all pending rewards before withdrawal
      * @dev Reverts if stake is still within lock period
      */
     function withdraw(
+        uint256 stakeId,
         uint256 withdrawAmount
     ) external whenNotPaused nonReentrant onlyFunded onlyAfterRewardsStart {
-        Stake storage s = userStakes[msg.sender];
+        Stake[] storage stakes = userStakes[msg.sender];
+        require(stakeId < stakes.length, "Invalid ID");
 
+        Stake storage s = stakes[stakeId];
         uint256 oldAmount = s.amount;
         require(withdrawAmount <= oldAmount, "Amount exceeds stake");
+        require(
+            block.timestamp >= s.depositTime + s.lockDuration,
+            "Still locked"
+        );
 
-        _claim(msg.sender);
+        _claimAll(msg.sender);
         _update();
 
         totalShares -= s.shares;
 
         uint256 remainingAmount = oldAmount - withdrawAmount;
 
-        if (remainingAmount > 0) {
+        if (remainingAmount == 0) {
+            stakes[stakeId] = stakes[stakes.length - 1];
+            stakes.pop();
+        } else {
             s.amount = 0;
             s.shares = 0;
 
-            _deposit(remainingAmount);
+            _deposit(remainingAmount, 0);
         }
 
         depositToken.safeTransfer(msg.sender, withdrawAmount);
-        emit Withdraw(msg.sender, withdrawAmount);
+        emit Withdraw(msg.sender, withdrawAmount, stakeId);
     }
 
     /**
@@ -309,7 +351,7 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
         onlyFunded
         onlyAfterRewardsStart
     {
-        uint256 claimed = _claim(msg.sender);
+        uint256 claimed = _claimAll(msg.sender);
         if (claimed > 0) emit Claim(msg.sender, claimed);
     }
 
@@ -324,19 +366,29 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
         nonReentrant
         onlyAfterRewardsStart
     {
-        Stake storage stake = userStakes[msg.sender];
+        Stake[] storage stakes = userStakes[msg.sender];
+        require(stakes.length > 0, "No stakes to withdraw");
+
+        uint256 totalAmount = 0;
+        uint256 totalSharesToRemove = 0;
+
+        // Calculate total amount and shares to remove
+        for (uint i = 0; i < stakes.length; i++) {
+            totalAmount += stakes[i].amount;
+            totalSharesToRemove += stakes[i].shares;
+        }
 
         // Update global state
         _update();
-        totalShares -= stake.shares;
+        totalShares -= totalSharesToRemove;
 
         // Clear all user stakes
         delete userStakes[msg.sender];
 
         // Transfer all deposited tokens back to user (no rewards)
-        depositToken.safeTransfer(msg.sender, stake.amount);
+        depositToken.safeTransfer(msg.sender, totalAmount);
 
-        emit EmergencyWithdrawAll(msg.sender, stake.amount);
+        emit EmergencyWithdrawAll(msg.sender, totalAmount);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -348,7 +400,9 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
      * @param user Address of the user to query
      * @return Array of Stake structs belonging to the user
      */
-    function getUserStakes(address user) external view returns (Stake memory) {
+    function getUserStakes(
+        address user
+    ) external view returns (Stake[] memory) {
         return userStakes[user];
     }
 
@@ -362,7 +416,7 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     function pendingRewards(
         address user
     ) external view returns (uint256 total) {
-        Stake memory stake = userStakes[user];
+        Stake[] memory stakes = userStakes[user];
         uint256 _acc = accRewardPerShare;
         if (block.timestamp > lastUpdateTime && totalShares > 0) {
             uint256 to = block.timestamp > rewardEndTime
@@ -372,9 +426,11 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
             uint256 reward = duration * rewardPerSecond();
             _acc += (reward * 1e18) / totalShares;
         }
-
-        total += ((stake.shares * _acc) / 1e18) - stake.rewardDebt;
-        return total;
+        for (uint i = 0; i < stakes.length; i++) {
+            Stake memory s = stakes[i];
+            if (block.timestamp < s.depositTime + s.lockDuration) continue;
+            total += ((s.shares * _acc) / 1e18) - s.rewardDebt;
+        }
     }
 
     /**
@@ -397,26 +453,66 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     /**
      * @notice Internal function to process a deposit and create/update a stake
      * @param amount Amount of deposit tokens to stake
+     * @param lockDays Number of days to lock the stake (0 for unlocked stakes)
      * @dev Calculates shares based on amount and multipliers from tier bonuses and lock duration
+     * @dev For unlocked stakes (lockDays == 0), adds to existing 0th stake or creates one if none exists
+     * @dev For locked stakes (lockDays > 0), creates a new stake entry in the user's stakes array
      * @dev Updates totalShares and sets rewardDebt to prevent immediate reward claiming on new stakes
      * @dev Reverts if calculated shares are 0 (amount too small) or max stakes limit reached
      */
-    function _deposit(uint256 amount) internal {
-        uint256 multiplierNumerator = _calculateMultiplierNumerator(amount);
+    function _deposit(uint256 amount, uint256 lockDays) internal {
+        uint256 multiplierNumerator = _calculateMultiplierNumerator(
+            amount,
+            lockDays
+        );
         uint256 shares = (amount * multiplierNumerator) /
             (BASE_MULTIPLIER * BASE_MULTIPLIER);
 
         require(shares > 0, "Amount too small. Resulted in 0 shares");
         _update();
 
-        Stake storage s = userStakes[msg.sender];
+        // Use the 0th stake for all unlocked stakes
+        if (lockDays == 0) {
+            Stake[] storage stakes = userStakes[msg.sender];
 
-        s.amount += amount;
-        s.shares += shares;
-        s.rewardDebt = (s.shares * accRewardPerShare) / 1e18;
+            // If user has no stakes, create the 0th stake
+            if (stakes.length == 0) {
+                stakes.push(
+                    Stake({
+                        amount: amount,
+                        shares: shares,
+                        depositTime: block.timestamp,
+                        lockDuration: 0,
+                        rewardDebt: (shares * accRewardPerShare) / 1e18
+                    })
+                );
+            } else {
+                // Update existing 0th stake
+                Stake storage s = stakes[0];
+                s.amount += amount;
+                s.shares += shares;
+                s.depositTime = block.timestamp;
+                s.rewardDebt = (s.shares * accRewardPerShare) / 1e18;
+            }
+        } else {
+            require(
+                userStakes[msg.sender].length < MAX_STAKES_PER_USER,
+                "Max stakes reached"
+            );
+
+            userStakes[msg.sender].push(
+                Stake({
+                    amount: amount,
+                    shares: shares,
+                    depositTime: block.timestamp,
+                    lockDuration: lockDays,
+                    rewardDebt: (shares * accRewardPerShare) / 1e18
+                })
+            );
+        }
 
         totalShares += shares;
-        emit Deposit(msg.sender, amount);
+        emit Deposit(msg.sender, amount, lockDays);
     }
 
     /**
@@ -426,15 +522,19 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
      * @dev Internal function used by claim() and other functions that need to settle rewards
      * @dev Only processes stakes that have passed their lock period
      */
-    function _claim(address user) internal returns (uint256 totalClaimed) {
+    function _claimAll(address user) internal returns (uint256 totalClaimed) {
         _update();
-        Stake storage s = userStakes[user];
-        uint256 pending = ((s.shares * accRewardPerShare) / 1e18) -
-            s.rewardDebt;
-        if (pending > 0) {
-            s.rewardDebt = (s.shares * accRewardPerShare) / 1e18;
-            rewardToken.safeTransfer(user, pending);
-            totalClaimed += pending;
+        Stake[] storage stakes = userStakes[user];
+        for (uint i = 0; i < stakes.length; i++) {
+            Stake storage s = stakes[i];
+            if (block.timestamp < s.depositTime + s.lockDuration) continue;
+            uint256 pending = ((s.shares * accRewardPerShare) / 1e18) -
+                s.rewardDebt;
+            if (pending > 0) {
+                s.rewardDebt = (s.shares * accRewardPerShare) / 1e18;
+                rewardToken.safeTransfer(user, pending);
+                totalClaimed += pending;
+            }
         }
     }
 
@@ -464,13 +564,15 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
     /**
      * @notice Calculates the total multiplier numerator for a stake
      * @param amount Amount of tokens being staked
+     * @param lockDays Number of days the stake will be locked
      * @return Combined multiplier numerator from tier and time bonuses
      * @dev Combines threshold-based bonuses (Silver/Gold/Diamond tiers) with time-based bonuses
      * @dev Time bonuses use both linear and quadratic scaling
      * @dev Result is capped at MAX_MULTIPLIER_NUMERATOR
      */
     function _calculateMultiplierNumerator(
-        uint256 amount
+        uint256 amount,
+        uint256 lockDays
     ) internal view returns (uint256) {
         // Calculate threshold-based bonus
         uint256 thresholdMultiplierNumerator = BASE_MULTIPLIER;
@@ -483,7 +585,16 @@ contract MultiTierStaking is Ownable2Step, Pausable, ReentrancyGuard {
             thresholdMultiplierNumerator += THRESHOLD_BONUS_PERCENTAGE_SILVER;
         }
 
-        return thresholdMultiplierNumerator;
+        // Calculate time-based bonus
+        uint256 timeMultiplierNumerator = BASE_MULTIPLIER +
+            (LINEAR_SCALE_CONSTANT * lockDays) +
+            (QUADRATIC_SCALE_CONSTANT * lockDays * lockDays);
+
+        return
+            timeMultiplierNumerator * thresholdMultiplierNumerator >
+                MAX_MULTIPLIER_NUMERATOR
+                ? MAX_MULTIPLIER_NUMERATOR
+                : timeMultiplierNumerator * thresholdMultiplierNumerator;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
